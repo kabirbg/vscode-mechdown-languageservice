@@ -20,7 +20,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -b",
     "watch": "tsc -b -w",
-    "postinstall": "cd client && npm install && cd ../server && cargo build && cd .."
+    "postinstall": "cd client && npm install && cd ../server && rustup run nightly cargo build && cd .."
   },
   "devDependencies": {
     "@types/node": "^20.5.7",
