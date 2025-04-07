@@ -4,3 +4,4 @@ server/target
 client/server
 .vscode-test
 tsconfig.tsbuildinfo
+.DS_STORE
