@@ -1,58 +1,76 @@
-import * as path from "path";
-import { workspace, ExtensionContext } from "vscode";
-
+import * as path from 'path';
+import { window, workspace, ExtensionContext } from 'vscode';
+import * as net from 'net';
+import * as child_process from 'child_process';
 import {
-  LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
-  TransportKind,
-} from "vscode-languageclient/node";
+	LanguageClient,
+	LanguageClientOptions,
+	ServerOptions,
+	StreamInfo,
+	TransportKind
+} from 'vscode-languageclient/node';
 
 let client: LanguageClient;
+let serverProcess: child_process.ChildProcessWithoutNullStreams;
 
 export function activate(context: ExtensionContext) {
-  // If the extension is launched in debug mode then the debug server options are used
-  // Otherwise the run options are used
-  const serverOptions: ServerOptions = {
-    run: {
-      command: context.asAbsolutePath(
-        path.join("server", "target", "release", "server")
-      ),
-      transport: TransportKind.stdio,
-    },
-    debug: {
-      command: context.asAbsolutePath(
-        path.join("server", "target", "debug", "server")
-      ),
-      transport: TransportKind.stdio,
-    },
-  };
+  const mechPath = context.asAbsolutePath(path.join('server', 'target', 'debug', 'mech'));
+  serverProcess = child_process.spawn(mechPath, ['serve']);
 
-  // Options to control the language client
+  // Enable logging
+  const log = window.createOutputChannel('Mech Language Server');
+  log.show(true);
+  serverProcess.stdout.on('data', (data) => log.appendLine(`[mech] ${data.toString().trim()}`));
+  serverProcess.stderr.on('data', (data) => log.appendLine(`[mech error] ${data.toString().trim()}`));
+  serverProcess.on('exit', (code) => log.appendLine(`[mech exited] code ${code}`));
+
+  const serverOptions: ServerOptions = () =>
+    new Promise<StreamInfo>((resolve, reject) => {
+      let retryCount = 0;
+  
+      const tryConnect = () => {
+        const connection = new net.Socket();
+  
+        connection.connect(8081, '127.0.0.1', () => {
+          log.appendLine('✅ Client connected to mech-serve');
+          resolve({ reader: connection, writer: connection });
+        });
+  
+        connection.on('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'ECONNREFUSED' && retryCount < 5) {
+            retryCount += 1;
+            log.appendLine(`🔁 Retry ${retryCount}: waiting for server...`);
+            setTimeout(tryConnect, 1000);
+          } else {
+            reject(err);
+          }
+        });
+  
+        connection.on('close', () => connection.removeAllListeners());
+      };
+  
+      tryConnect();
+    });    
+
   const clientOptions: LanguageClientOptions = {
-    // Register the server for all documents by default
-    documentSelector: [{ scheme: "file", language: "Mech" }],
+    documentSelector: [{ scheme: 'file', language: 'Mech' }],
     synchronize: {
-      // Notify the server about file changes to '.clientrc files contained in the workspace
-      fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),
+      fileEvents: workspace.createFileSystemWatcher('**/.clientrc'),
     },
   };
 
-  // Create the language client and start the client.
-  client = new LanguageClient(
-    "my-language-server",
-    serverOptions,
-    clientOptions,
-    true
-  );
-
-  // Start the client. This will also launch the server
+  client = new LanguageClient('mechLanguageServer', 'Mech Language Server', serverOptions, clientOptions);
   client.start();
 }
 
 export function deactivate(): Thenable<void> | undefined {
-  if (!client) {
-    return undefined;
+  if (serverProcess && !serverProcess.killed) {
+	serverProcess.kill();
   }
-  return client.stop();
+	
+  if (!client) {
+	return undefined;
+  }
+
+  client.stop();
 }
