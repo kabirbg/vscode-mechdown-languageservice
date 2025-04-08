@@ -27,6 +27,7 @@ use tabled::{
 use serde_json;
 use std::panic;
 use std::sync::{Arc, Mutex};
+use tower_lsp_server::{LspService, Server};
 
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -134,18 +135,28 @@ async fn main() -> Result<(), MechError> {
   // Serve
   // --------------------------------------------------------------------------
   if let Some(matches) = matches.subcommand_matches("serve") {
+    let port = matches.get_one::<String>("port").cloned().unwrap_or_else(|| "8081".into());
+    let address = matches.get_one::<String>("address").cloned().unwrap_or_else(|| "127.0.0.1".into());
+    let full_address = format!("{}:{}", address, port);
+    let mech_paths: Vec<String> = matches
+        .get_many::<String>("mech_serve_file_paths")
+        .map_or(vec![], |files| files.map(|f| f.to_string()).collect());
 
-    let port: String = matches.get_one::<String>("port").cloned().unwrap_or("8081".to_string());
-    let address = matches.get_one::<String>("address").cloned().unwrap_or("127.0.0.1".to_string());
-    let full_address: String = format!("{}:{}",address,port);
-    let mech_paths: Vec<String> = matches.get_many::<String>("mech_serve_file_paths").map_or(vec![], |files| files.map(|file| file.to_string()).collect());
-    
+    let listener = tokio::net::TcpListener::bind(&full_address).await?;
 
-    let mut server = MechServer::new(&full_address);
-    server.init().await?;
-    server.load_sources(&mech_paths)?;
-    server.serve().await?;
-    
+    loop {
+        let (stream, _) = listener.accept().await?;
+        // Per-connection server instance
+        let mut server = MechServer::new(&full_address);
+        server.init().await?;
+        server.load_sources(&mech_paths)?;
+        let (service, socket) = LspService::new(|client| server.with_client(client));
+        let (read, write) = tokio::io::split(stream);
+        tokio::spawn(async move {
+            Server::new(read, write, socket).serve(service).await;
+        });
+      
+    }
   }
   // --------------------------------------------------------------------------
   // Format
