@@ -1,7 +1,13 @@
 use warp::http::header::{HeaderMap, HeaderValue};
 use warp::Filter;
 use warp::Future;
+use tower_lsp_server::lsp_types::*;
+use tower_lsp_server::jsonrpc::{Result as LspResult};
+use tower_lsp_server::{LanguageServer, Client, UriExt};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{pin::Pin, option::Option};
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
 use base64::{encode, decode};
 use chrono::Local;
 use mech_core::*;
@@ -17,9 +23,10 @@ pub struct MechServer {
   wasm_path: (String, String),
   js_path: (String, String),
   full_address: String,
-  mechfs: MechFileSystem,
+  mechfs: Arc<Mutex<MechFileSystem>>,
   js: Vec<u8>,
   wasm: Vec<u8>,
+  client: Option<Client>,
 }
 
 impl MechServer {
@@ -34,7 +41,7 @@ impl MechServer {
     let js_path = "src/wasm/pkg/mech_wasm.js";
     let js_backup_url = format!("https://github.com/mech-lang/mech/releases/download/v{}-beta/mech_wasm.js", "0.2.34");
 
-    let mut mechfs = MechFileSystem::new();
+    let mut mechfs = Arc::new(Mutex::new(MechFileSystem::new()));
 
     Self {
       badge: "[Mech Server]".truecolor(34, 204, 187),
@@ -46,6 +53,7 @@ impl MechServer {
       mechfs,
       js: vec![],
       wasm: vec![],
+      client: None,
     }
   }
 
@@ -58,7 +66,7 @@ impl MechServer {
     match String::from_utf8(stylesheet) {
       Ok(s) => {
         println!("{} Loaded stylesheet", self.badge);
-        self.mechfs.set_stylesheet(&s);
+        self.mechfs.lock().unwrap().set_stylesheet(&s);
       },
       Err(e) => {
         let msg = format!("Failed to convert stylesheet to string: {}", e);
@@ -78,7 +86,7 @@ impl MechServer {
 
   pub fn load_sources(&mut self, paths: &Vec<String>) -> MResult<()> {
     for path in paths {
-      self.mechfs.watch_source(&path)?;
+      self.mechfs.lock().unwrap().watch_source(&path)?;
     }
     Ok(())
   }
@@ -111,6 +119,11 @@ impl MechServer {
     }
   }
 
+  pub fn with_client(mut self, client: Client) -> Self {
+    self.client = Some(client);
+    self
+  }
+
   pub async fn serve(&self) -> MResult<()> {
     if !self.init {
       return Err(MechError{file: file!().to_string(), tokens: vec![], msg: "Server not initialized".to_string(), id: line!(), kind: MechErrorKind::None});
@@ -123,7 +136,7 @@ impl MechServer {
     }).expect("Error setting Ctrl-C handler");
 
 
-    let code_source = self.mechfs.sources();
+    let code_source = self.mechfs.lock().unwrap().sources();
 
     // Serve the HTML file which includes the JS
     let mut headers = HeaderMap::new();
@@ -220,4 +233,44 @@ impl MechServer {
     std::process::exit(0);
   }
 
+}
+
+impl LanguageServer for MechServer {
+  fn initialize(&self, _: InitializeParams) -> Pin<Box<dyn Future<Output = LspResult<InitializeResult>> + Send>> {
+      let result = InitializeResult {
+          server_info: Some(ServerInfo {
+              name: "mech-lsp".into(),
+              version: Some("0.1.0".into()),
+          }),
+          capabilities: ServerCapabilities {
+              text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+              completion_provider: Some(CompletionOptions::default()),
+              ..ServerCapabilities::default()
+          },
+      };
+      Box::pin(async move { Ok(result) })
+  }
+
+  fn did_open(&self, params: DidOpenTextDocumentParams) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+      let client  = self.client.clone();
+      let mechfs = self.mechfs.clone();
+      Box::pin(async move {
+          let uri = params.text_document.uri;
+          let path = match uri.to_file_path() {
+              Some(p) => p,
+              None => {
+                  println!("⚠️ could not convert URI to file path: {:?}", uri);
+                  return;
+              }
+          };
+          let path_str = path.to_string_lossy().to_string();
+          mechfs.lock().unwrap().watch_source(path_str.as_str());
+      })
+  }
+
+  fn shutdown(&self) -> Pin<Box<dyn Future<Output = LspResult<()>> + Send>> {
+      Box::pin(async move { Ok(()) })
+  }
+
+  // You can implement more LSP methods the same way
 }
