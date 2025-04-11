@@ -24,8 +24,8 @@ fn list_files(path: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
   pub struct MechFileSystem {
     sources: Arc<RwLock<MechSources>>,
     tx: Sender<Event>,                     
-    watchers: Vec<Box<dyn Watcher>>,                 
-    reload_thread: JoinHandle<()>,                     
+    //watchers: Vec<Box<dyn Watcher>>,                 
+    //reload_thread: JoinHandle<()>,                     
   }
   
   impl MechFileSystem {
@@ -60,8 +60,8 @@ fn list_files(path: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
       MechFileSystem {
         sources,
         tx,
-        reload_thread,
-        watchers: Vec::new(),
+        //reload_thread,
+        //watchers: Vec::new(),
       }
     }
   
@@ -135,7 +135,7 @@ fn list_files(path: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
         Ok(mut watcher) => {
           println!("{} Watching: {}", "[Watch]".truecolor(153,221,85), src_path.display());
           watcher.watch(&src_path, RecursiveMode::Recursive).unwrap();
-          self.watchers.push(Box::new(watcher));
+          //self.watchers.push(Box::new(watcher));
         }
         Err(err) => println!("[Watch] Error creating watcher: {}", err),
       }
